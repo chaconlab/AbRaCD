@@ -9,6 +9,8 @@ use File::Spec;
 use Cwd qw(getcwd);
 use POSIX qw(strftime);
 use IO::Handle;
+use Fcntl qw(O_WRONLY O_CREAT O_EXCL);
+use Errno qw(EEXIST);
 
 my $PREPROCESS = File::Spec->catfile($Bin, 'AbRaCD_chothia_preprocces.pl');
 my $ENGINEERING_PREP = File::Spec->catfile($Bin, 'ab_engineering_prep.pl');
@@ -30,7 +32,7 @@ my %CDR_EXTRA_ARGS = (
     H3 => ['--kink_merge', 0.9, '--kink_mergeA', 0.9, '--tkink', 0.70, '--tkinkA', 0.70],
 );
 
-our ($LOG_FILE, $LOG_FH, $CURRENT_STAGE, $RERUN_COMMAND);
+our ($LOG_FILE, $LOG_FH, $CURRENT_STAGE, $RERUN_COMMAND, @TEMP_RCD_INPUT_FILES);
 $CURRENT_STAGE = 'argument validation';
 
 sub quote_arg {
@@ -50,6 +52,18 @@ sub log_event {
     my $timestamp = strftime('%Y-%m-%d %H:%M:%S', localtime);
     $message =~ s/\n/\n                      /g;
     print {$LOG_FH} "[$timestamp] [$level] [$CURRENT_STAGE] $message\n";
+}
+
+sub cleanup_temp_rcd_inputs {
+    for my $path (@TEMP_RCD_INPUT_FILES) {
+        next unless defined($path) && -e $path;
+        if (unlink $path) {
+            log_event('CLEANUP', "Removed temporary RCD input: $path");
+        } else {
+            log_event('WARNING', "Could not remove temporary RCD input '$path': $!");
+        }
+    }
+    @TEMP_RCD_INPUT_FILES = ();
 }
 
 sub usage {
@@ -101,7 +115,7 @@ Input:
 
   --repRCD X:          number of RCD runs (default: 1).
 
-  --resROS Y:          Rosetta refinements per RCD run (default: 1).
+  --repROS Y:          Rosetta refinement repetitions per RCD run (default: 1; 0 skips refinement).
   
   Log file:            NAME.log when --OUT NAME is used; otherwise AbRaCD.log.
                        The log is written in the current working directory.
@@ -125,15 +139,135 @@ sub fail {
     print STDERR "ERROR: $message\n\n";
     print STDERR "Suggested action: $suggestion\n\n" if defined $suggestion;
     usage(*STDERR);
+    cleanup_temp_rcd_inputs();
     close $LOG_FH if $LOG_FH;
     exit 2;
 }
 
+sub write_unique_input_file {
+    my ($directory, $stem, $kind, $lines_ref) = @_;
+    for my $index (0 .. 9999) {
+        my $suffix = $index ? "_${index}" : '';
+        my $name = "${stem}_${kind}${suffix}.txt";
+        my $path = File::Spec->catfile($directory, $name);
+        my $flags = O_WRONLY | O_CREAT | O_EXCL;
+        my $fh;
+        if (!sysopen($fh, $path, $flags)) {
+            next if $! == EEXIST;
+            fail("Cannot create temporary RCD input '$path': $!",
+                'Check write permissions for the input-list directory, then rerun: ' . $RERUN_COMMAND);
+        }
+        push @TEMP_RCD_INPUT_FILES, $path;
+        print {$fh} @{$lines_ref} or fail("Could not write temporary RCD input '$path': $!",
+            'Check available disk space and directory permissions, then rerun: ' . $RERUN_COMMAND);
+        close $fh or fail("Could not close temporary RCD input '$path': $!",
+            'Check directory permissions and rerun: ' . $RERUN_COMMAND);
+        return File::Spec->rel2abs($path);
+    }
+    fail("Could not find an unused filename for the temporary H3 $kind input based on '$stem'.",
+        'Remove or rename stale temporary files, then rerun: ' . $RERUN_COMMAND);
+}
+
+sub split_short_h3_input {
+    my ($input_path) = @_;
+    open my $input_fh, '<', $input_path or fail("Cannot read H3 RCD input '$input_path': $!",
+        'Check that the H3 input list exists and is readable, then rerun: ' . $RERUN_COMMAND);
+    my (@short_lines, @long_lines);
+    my ($short_count, $long_count, $line_number) = (0, 0, 0);
+    while (my $line = <$input_fh>) {
+        ++$line_number;
+        if ($line =~ /^\s*(?:#|$)/) {
+            push @short_lines, $line;
+            push @long_lines, $line;
+            next;
+        }
+        my $parse_line = $line;
+        $parse_line =~ s/^\s+//;
+        my @fields = split /\s+/, $parse_line;
+        fail("Malformed H3 RCD input at line $line_number in '$input_path'.",
+            'Each entry must contain the PDB, start, end, chain, sequence, sequence length, and CDR fields.')
+            unless @fields >= 7 && $fields[4] =~ /\S/ && $fields[5] =~ /^\d+$/ && uc($fields[6]) eq 'H3';
+        my $sequence_length = length($fields[4]);
+        fail("Sequence length mismatch at line $line_number in '$input_path' (sequence has $sequence_length residues, length field says $fields[5]).",
+            'Correct the H3 RCD input list so its sequence and length fields agree.')
+            unless $sequence_length == $fields[5];
+        if ($sequence_length <= 7) {
+            push @short_lines, $line;
+            ++$short_count;
+        } else {
+            push @long_lines, $line;
+            ++$long_count;
+        }
+    }
+    close $input_fh or fail("Could not close H3 RCD input '$input_path': $!",
+        'Check that the input list is readable, then rerun: ' . $RERUN_COMMAND);
+    return unless $short_count;
+
+    my $directory = dirname($input_path);
+    my $stem = basename($input_path);
+    $stem =~ s/\.txt\z//i;
+    my $short_path = write_unique_input_file($directory, $stem, 'short', \@short_lines);
+    my $long_path = write_unique_input_file($directory, $stem, 'long', \@long_lines);
+    log_event('RCD INPUT', "H3 input split into $short_count short and $long_count long case(s).");
+    return {
+        short_path => $short_path,
+        long_path => $long_path,
+        short_count => $short_count,
+        long_count => $long_count,
+    };
+}
+
+sub run_rosetta_refinements {
+    my ($cdr, $out, $rep, $rep_rcd, $rep_ros, $np, $model, $rcd_input_path, $refine_script) = @_;
+    if ($rep_ros == 0) {
+        print "Rosetta refinement skipped for $out because --repROS is 0.\n";
+        log_event('ROSETTA', "Skipped refinement for $out because --repROS is 0.");
+        return;
+    }
+    for my $ros (1 .. $rep_ros) {
+        my $dir = $out;
+        fail("RCD completed successfully but did not create directory '$dir'.",
+            "Check RCD's output above and verify that the current directory is writable, then rerun: $RERUN_COMMAND")
+            unless -d $dir;
+        my $old = File::Spec->rel2abs('.');
+        my $stage = "Rosetta refinement ($cdr, RCD repetition $rep/$rep_rcd, refinement $ros/$rep_ros)";
+        $CURRENT_STAGE = $stage;
+        chdir $dir or fail("Cannot enter output directory '$dir': $!",
+            "Check directory permissions and rerun: $RERUN_COMMAND");
+        my $suffix = "_${out}_ros${ros}";
+        my $scenario = $model ? 'modeling' : 'native';
+        my @refine_cmd = ($^X, $refine_script, $rcd_input_path, $scenario, $suffix, $np, '--energy ref2015');
+        my $display_cmd = format_command(@refine_cmd);
+        print "\n[$stage]\n> $display_cmd\n";
+        log_event('ROSETTA', "Starting refinement $ros of $rep_ros in $dir; suffix: $suffix");
+        log_event('COMMAND', $display_cmd);
+        my $status = system { $refine_cmd[0] } @refine_cmd;
+        chdir $old or fail("Cannot return to directory '$old': $!",
+            "Restore access to the original working directory '$old' before starting another run.");
+        if ($status != 0) {
+            $CURRENT_STAGE = $stage;
+            my $detail = $status == -1 ? "could not execute: $!"
+                        : ($status & 127) ? "terminated by signal " . ($status & 127)
+                        : "exit code " . ($status >> 8);
+            fail("Stage '$stage' failed ($detail). Command: $display_cmd",
+                "Review the Rosetta or PyRosetta error above, then rerun: $RERUN_COMMAND");
+        }
+        log_event('SUCCESS', "Rosetta refinement $ros of $rep_ros completed in $dir.");
+        clean_model_outputs($dir) if $model;
+    }
+}
+
 sub run_command {
     my ($stage, @cmd) = @_;
+    my $options = ref($cmd[-1]) eq 'HASH' ? pop @cmd : {};
+    my $quiet = $options->{quiet};
     $CURRENT_STAGE = $stage;
     my $display_cmd = format_command(@cmd);
-    print "\n[$stage]\n> $display_cmd\n";
+    if ($quiet) {
+        print "\n[$stage]\n";
+    } else {
+        print "\n[$stage]\n> $display_cmd\n";
+    }
     log_event('COMMAND', $display_cmd);
     my $status = system { $cmd[0] } @cmd;
     if ($status == 0) {
@@ -312,7 +446,7 @@ fail('--raw and --model cannot be used together.',
     if scalar(grep { $_ eq '--raw' } @original_args) && scalar(grep { $_ eq '--model' } @original_args);
 
 my $purge = 0;
-my ($out_name, $rep_rcd, $res_ros, $nloops_override, $locobest_override) = (undef, 1, 1, undef, undef);
+my ($out_name, $rep_rcd, $rep_ros, $nloops_override, $locobest_override) = (undef, 1, 1, undef, undef);
 my @requested_cdrs;
 my $np_requested = 0;
 my %seen_option;
@@ -351,9 +485,9 @@ while (@args) {
         fail('--repRCD may only be specified once.', 'Keep one --repRCD option and provide one positive integer.') if $seen_option{$arg}++;
         $rep_rcd = take_option_value('--repRCD', \@args, '2', \@original_args);
     }
-    elsif ($arg eq '--resROS') {
-        fail('--resROS may only be specified once.', 'Keep one --resROS option and provide one positive integer.') if $seen_option{$arg}++;
-        $res_ros = take_option_value('--resROS', \@args, '2', \@original_args);
+    elsif ($arg eq '--repROS') {
+        fail('--repROS may only be specified once.', 'Keep one --repROS option and provide a non-negative integer.') if $seen_option{$arg}++;
+        $rep_ros = take_option_value('--repROS', \@args, '1', \@original_args);
     }
     else {
         fail("Unknown argument or invalid order: $arg",
@@ -364,7 +498,7 @@ while (@args) {
 log_event('INPUT', defined($input) ? "Input: $input" : 'Input: all PDB files in the current directory');
 log_event('OPTIONS', "CDRs=" . (@requested_cdrs ? join(',', @requested_cdrs) : '(missing)')
     . "; raw=$raw; model=$model; purge=$purge; OUT=" . (defined($out_name) ? $out_name : '(default)')
-    . "; repRCD=$rep_rcd; resROS=$res_ros; NP=" . (defined($NP) ? $NP : '(missing)'));
+    . "; repRCD=$rep_rcd; repROS=$rep_ros; NP=" . (defined($NP) ? $NP : '(missing)'));
 print "Log file: $LOG_FILE\n";
 fail('--CDRs is required.', 'Add --CDRs H3 or --CDRs ALL.') unless @requested_cdrs;
 my @cdrs;
@@ -402,11 +536,15 @@ fail('--purge cannot be used with --raw or --model.',
 fail('--raw and --model are equivalent mode selectors; provide only one.',
     'Remove --raw or --model and keep the other mode selector.')
     if scalar(grep { $_ eq '--raw' } @original_args) && scalar(grep { $_ eq '--model' } @original_args);
-for my $pair (['--repRCD', $rep_rcd], ['--resROS', $res_ros]) {
+for my $pair (['--repRCD', $rep_rcd]) {
     fail("$pair->[0] must be a positive integer.",
         'Use a positive integer, for example ' . corrected_option_command($pair->[0], '1', \@original_args))
         unless defined($pair->[1]) && $pair->[1] =~ /^\d+$/ && $pair->[1] > 0;
 }
+fail('--repROS must be a non-negative integer.',
+    'Use 0 to skip Rosetta refinement, or a positive integer such as 1: '
+        . corrected_option_command('--repROS', '1', \@original_args))
+    unless defined($rep_ros) && $rep_ros =~ /^\d+$/;
 for my $pair (['--NP', $NP], ['--NLOOPS', $nloops_override], ['--LOCOBEST', $locobest_override]) {
     next unless defined $pair->[1];
     my $default = $pair->[0] eq '--NP' ? '4'
@@ -456,7 +594,7 @@ fail("Engineering preparation script not found: $ENGINEERING_PREP",
     'Restore ab_engineering_prep.pl beside abracd.pl and rerun: ' . $RERUN_COMMAND)
     if $model && !-f $ENGINEERING_PREP;
 fail("Refinement script not found: $REFINE", 'Restore the AbRaCD Perl scripts and rerun: ' . $RERUN_COMMAND)
-    if $res_ros > 0 && !-f $REFINE;
+    if $rep_ros > 0 && !-f $REFINE;
 for my $map ($CDR_MAP, $KORP_MAP, $DUN_MAP) {
     fail("Required RCD map not found: $map", 'Restore the required map file at the path shown above, then rerun: ' . $RERUN_COMMAND)
         unless -f $map;
@@ -504,7 +642,7 @@ print "Preflight passed. Maps found; Python dependencies available; RCD executab
 print $use_mpi ? "RCD mode: MPI ($NP processes)\n" : "RCD mode: serial (default NP=1)\n";
 log_event('PREFLIGHT', "Python=$python; RCD executable=$rcd_executable; MPI="
     . ($use_mpi ? "enabled ($NP processes), launcher=$mpi_launcher" : 'disabled'));
-log_event('SETTINGS', "CDRs=" . join(',', @cdrs) . "; RCD repetitions=$rep_rcd; Rosetta per RCD=$res_ros; energy=56; output prefix=" . (defined($out_name) ? $out_name : '(none)'));
+log_event('SETTINGS', "CDRs=" . join(',', @cdrs) . "; RCD repetitions=$rep_rcd; Rosetta repetitions per RCD=$rep_ros; energy=56; output prefix=" . (defined($out_name) ? $out_name : '(none)'));
 log_event('PREFLIGHT', "Maps: CDR=$CDR_MAP; KORP=$KORP_MAP; Dunbrack=$DUN_MAP");
 log_event('PREFLIGHT', 'All required programs, Python modules, and map files are available.');
 
@@ -534,7 +672,7 @@ if ($model) {
                 push @next, ('--NLOOPS', $nloops_override) if $seen_option{'--NLOOPS'};
                 push @next, ('--LOCOBEST', $locobest_override) if $seen_option{'--LOCOBEST'};
                 push @next, ('--repRCD', $rep_rcd) if $seen_option{'--repRCD'};
-                push @next, ('--resROS', $res_ros) if $seen_option{'--resROS'};
+                push @next, ('--repROS', $rep_ros) if $seen_option{'--repROS'};
                 push @next, ('--OUT', $out_name) if defined $out_name;
                 $next[0] = basename($gap_list);
                 print "  ", join(' ', basename($0), @next), "\n";
@@ -572,6 +710,8 @@ for my $cdr (@cdrs) {
     my $locobest = defined($locobest_override) ? $locobest_override : $default_locobest;
     my @cdr_extra_args = @{$CDR_EXTRA_ARGS{$cdr} || []};
     my $rcd_input_path = $rcd_inputs{$cdr};
+    my $h3_split = $cdr eq 'H3' ? split_short_h3_input($rcd_input_path) : undef;
+    my @deferred_rosetta;
     log_event('CDR START', "Starting CDR $cdr using " . basename($rcd_input_path)
         . "; flag=$flag; NLOOPS=$nloops; LOCOBEST=$locobest");
 
@@ -579,52 +719,69 @@ for my $cdr (@cdrs) {
         my $out = (defined($out_name) ? "${out_name}_" : '') . "${cdr}_rep${rep}";
         push @output_dirs, $out;
         log_event('RCD', "Starting RCD repetition $rep of $rep_rcd; output directory: $out");
-        my @rcd_cmd = ($use_mpi ? ($mpi_launcher, '-np', $NP) : (), $rcd_executable, $rcd_input_path,
-            '--ABmap', $CDR_MAP, $flag, @cdr_extra_args, '--nokink_merge', $nokink,
-            '--nterm_rama', 0, '-r', '-e', 56, '--energy_file', $KORP_MAP,
-            '-n', $nloops, '--loco_best', $locobest, '-x', $DUN_MAP,
-            '-d', $dval, '--linear', '-t', 0.99, '-o', $out);
-        push @rcd_cmd, '--bench' unless $model;
-        run_command("RCD sampling ($cdr, repetition $rep/$rep_rcd)", @rcd_cmd);
-        trim_model_results(File::Spec->catfile($out, 'results.txt')) if $model;
-
-        for my $ros (1 .. $res_ros) {
-            my $dir = $out;
-            fail("RCD completed successfully but did not create directory '$dir'.",
-                "Check RCD's output above and verify that the current directory is writable, then rerun: $RERUN_COMMAND")
-                unless -d $dir;
-            my $old = File::Spec->rel2abs('.');
-            my $stage = "Rosetta refinement ($cdr, RCD repetition $rep/$rep_rcd, refinement $ros/$res_ros)";
-            $CURRENT_STAGE = $stage;
-            chdir $dir or fail("Cannot enter output directory '$dir': $!",
-                "Check directory permissions and rerun: $RERUN_COMMAND");
-            my $suffix = "_${out}_ros${ros}";
-            my $scenario = $model ? 'modeling' : 'native';
-            my @refine_cmd = ($^X, $REFINE, $rcd_input_path, $scenario, $suffix, $NP, '--energy ref2015');
-            my $display_cmd = format_command(@refine_cmd);
-            print "\n[$stage]\n> $display_cmd\n";
-            log_event('ROSETTA', "Starting refinement $ros of $res_ros in $dir; suffix: $suffix");
-            log_event('COMMAND', $display_cmd);
-            my $status = system { $refine_cmd[0] } @refine_cmd;
-            chdir $old or fail("Cannot return to directory '$old': $!",
-                "Restore access to the original working directory '$old' before starting another run.");
-            if ($status != 0) {
-                $CURRENT_STAGE = $stage;
-                my $detail = $status == -1 ? "could not execute: $!"
-                            : ($status & 127) ? "terminated by signal " . ($status & 127)
-                            : "exit code " . ($status >> 8);
-                fail("Stage '$stage' failed ($detail). Command: $display_cmd",
-                    "Review the Rosetta or PyRosetta error above, then rerun: $RERUN_COMMAND");
+        if ($h3_split) {
+            my $short_results = File::Spec->catfile($out, 'results_shorts.txt');
+            if ($h3_split->{short_count}) {
+                fail("Refusing to overwrite existing short-loop results '$short_results'.",
+                    'Choose a different --OUT prefix or move the existing result file before rerunning.') if -e $short_results;
+                my @short_cmd = ($use_mpi ? ($mpi_launcher, '-np', $NP) : (), $rcd_executable,
+                    $h3_split->{short_path}, '-r', '-e', 56, '--energy_file', $KORP_MAP,
+                    '--nterm_rama', 0);
+                push @short_cmd, '--bench' unless $model;
+                push @short_cmd, ('-n', $nloops, '--loco_best', $locobest,
+                    '-x', $DUN_MAP, '-d', 0.5, '--linear', '-t', 0.99, '-o', $out);
+                run_command("RCD sampling ($cdr, repetition $rep/$rep_rcd)", @short_cmd, { quiet => 1 });
+                trim_model_results(File::Spec->catfile($out, 'results.txt')) if $model;
+                my $short_results_source = File::Spec->catfile($out, 'results.txt');
+                fail("Short-loop RCD run did not create '$short_results_source'.",
+                    "Check RCD's output above and verify the output directory is writable, then rerun: $RERUN_COMMAND")
+                    unless -f $short_results_source;
+                rename $short_results_source, $short_results
+                    or fail("Could not preserve short-loop results as '$short_results': $!",
+                        'Check directory permissions and available disk space, then rerun: ' . $RERUN_COMMAND);
             }
-            log_event('SUCCESS', "Rosetta refinement $ros of $res_ros completed in $dir.");
-            clean_model_outputs($dir) if $model;
+            if ($h3_split->{long_count}) {
+                my @long_cmd = ($use_mpi ? ($mpi_launcher, '-np', $NP) : (), $rcd_executable,
+                    $h3_split->{long_path}, '--ABmap', $CDR_MAP, $flag, @cdr_extra_args,
+                    '--nokink_merge', $nokink, '--nterm_rama', 0, '-r', '-e', 56,
+                    '--energy_file', $KORP_MAP, '-n', $nloops, '--loco_best', $locobest,
+                    '-x', $DUN_MAP, '-d', $dval, '--linear', '-t', 0.99, '-o', $out);
+                push @long_cmd, '--bench' unless $model;
+                run_command("RCD sampling ($cdr, repetition $rep/$rep_rcd)", @long_cmd, { quiet => 1 });
+                trim_model_results(File::Spec->catfile($out, 'results.txt')) if $model;
+            }
+        } else {
+            my @rcd_cmd = ($use_mpi ? ($mpi_launcher, '-np', $NP) : (), $rcd_executable, $rcd_input_path,
+                '--ABmap', $CDR_MAP, $flag, @cdr_extra_args, '--nokink_merge', $nokink,
+                '--nterm_rama', 0, '-r', '-e', 56, '--energy_file', $KORP_MAP,
+                '-n', $nloops, '--loco_best', $locobest, '-x', $DUN_MAP,
+                '-d', $dval, '--linear', '-t', 0.99, '-o', $out);
+            push @rcd_cmd, '--bench' unless $model;
+            run_command("RCD sampling ($cdr, repetition $rep/$rep_rcd)", @rcd_cmd);
+            trim_model_results(File::Spec->catfile($out, 'results.txt')) if $model;
+        }
+
+        if ($h3_split) {
+            push @deferred_rosetta, [$out, $rep];
+        } else {
+            run_rosetta_refinements($cdr, $out, $rep, $rep_rcd, $rep_ros, $NP, $model, $rcd_input_path, $REFINE);
+        }
+    }
+    if ($h3_split) {
+        cleanup_temp_rcd_inputs();
+        for my $deferred (@deferred_rosetta) {
+            run_rosetta_refinements($cdr, $deferred->[0], $deferred->[1], $rep_rcd,
+                $rep_ros, $NP, $model, $rcd_input_path, $REFINE);
         }
     }
 }
 
-print "\nWorkflow completed for CDRs " . join(', ', @cdrs) . ". RCD runs per CDR: $rep_rcd; Rosetta refinements per RCD run: $res_ros.\n";
+print "\nWorkflow completed for CDRs " . join(', ', @cdrs) . ". RCD runs per CDR: $rep_rcd; Rosetta refinements per RCD run: $rep_ros.";
+print " Rosetta refinement was skipped as requested (--repROS 0)." if $rep_ros == 0;
+print "\n";
 $CURRENT_STAGE = 'workflow complete';
-log_event('COMPLETE', "Workflow completed. CDRs=" . join(',', @cdrs) . "; RCD runs per CDR=$rep_rcd; Rosetta refinements per RCD run=$res_ros.");
+log_event('COMPLETE', "Workflow completed. CDRs=" . join(',', @cdrs) . "; RCD runs per CDR=$rep_rcd; Rosetta refinements per RCD run=$rep_ros.");
+log_event('ROSETTA', 'Rosetta refinement skipped by user (--repROS 0).') if $rep_ros == 0;
 log_event('OUTPUT', "Output directories: " . join(', ', @output_dirs));
 close $LOG_FH if $LOG_FH;
 exit 0;

@@ -144,7 +144,10 @@ abracd.pl AbRaCD_input_H3.txt --raw --CDRs H3
 abracd.pl AbRaCD_GAP_H3.txt --model --CDRs H3
 
 # Configure MPI, sampling, repetitions, and an output/log prefix
-abracd.pl antibody.pdb --CDRs H3 --NP 8 --NLOOPS 50000 --LOCOBEST 1000 --repRCD 2 --resROS 1 --OUT run_h3
+abracd.pl antibody.pdb --CDRs H3 --NP 8 --NLOOPS 50000 --LOCOBEST 1000 --repRCD 2 --repROS 1 --OUT run_h3
+
+# Run RCD without the Rosetta refinement stage
+abracd.pl antibody.pdb --CDRs H3 --repROS 0 --OUT rcd_only_h3
 ```
 
 The run log is `AbRaCD.log`, or `<OUT>.log` when `--OUT` is set. `--NP` enables MPI RCD execution; omit it for serial RCD.
