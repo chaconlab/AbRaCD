@@ -12,6 +12,7 @@ This repository contains the scripts, data, and instructions needed to run AbRaC
 
 - [Overview](#overview)
 - [Repository directory guide](#repository-directory-guide)
+  - [Hybrid AF3–AbRaCD structures](#hybrid-af3abracd-structures)
 - [Requirements](#requirements)
 - [Installation](#installation)
   - [General Bash user without Conda](#general-bash-user-without-conda)
@@ -19,7 +20,9 @@ This repository contains the scripts, data, and instructions needed to run AbRaC
 - [Quick start](#quick-start)
 - [Fast commands for reproducing benchmark paper results](#fast-commands-for-reproducing-benchmark-paper-results)
   - [AbRaCD Leakege Free Benchmark (ALFB)](#abracd-leakege-free-benchmark-alfb)
+    - [ALFB hybrid AF3–AbRaCD structures](#alfb-hybrid-af3abracd-structures)
   - [RosettaBenchmark](#rosettabenchmark)
+    - [RosettaBenchmark hybrid AF3–AbRaCD structures](#rosettabenchmark-hybrid-af3abracd-structures)
 - [Repository contents](#repository-contents)
 - [Troubleshooting](#troubleshooting)
 
@@ -48,11 +51,15 @@ src/
 ```
 
 - `data/`
-  - `data/Benchmarks/` groups the available evaluation datasets (AFLB and Rosetta). Each dataset may include source Chothia structures, processed/renumbered structures with the RCD input lists, FASTA sequences, AlphaFold 3 model structures, and hybrid AF3–AbRaCD structures.
+  - `data/Benchmarks/` groups the available evaluation datasets (AFLB and Rosetta). Each dataset may include source Chothia structures, processed/renumbered structures with the RCD input lists, FASTA sequences, and AlphaFold 3 model structures.
   - `data/Maps/` contains the binary maps required by the workflow. CDR is included and KORP, and Dunbrack should be copied after RCD instalation.
 - `paper_results/` paper-related results.
 - `scripts/` contains the command-line workflow scripts.
 - `src/` contains supporting utilities used by the workflow.
+
+### Hybrid AF3–AbRaCD structures
+
+The ALFB and RosettaBenchmark `Hibrid_AF3-AbRaCD/` folders contain structures made by aligning the six anchor residues around each target H3 loop (three on each side) between the crystallographic structure and the AF3 model, then transferring the crystallographic loop into the AF3 model frame. This allows loop-specific RMSD evaluation of AF3 and provides structures for running AbRaCD in the AF3 model context to test whether it can improve on the AF3 prediction.
 
 ## Requirements
 
@@ -213,6 +220,17 @@ abracd.pl --raw --CDRs ALL --NP 8 --OUT ALFB
 
 Runs all six CDRs with the default sampling settings and Rosetta refinement. Adjust `--NP` to match your available MPI processes. Results use the `ALFB` prefix; the log is `ALFB.log`.
 
+#### ALFB hybrid AF3–AbRaCD structures
+
+The hybrid H3 inputs are in `data/Benchmarks/ALFB/Hibrid_AF3-AbRaCD/`. Run them from that directory:
+
+```bash
+cd data/Benchmarks/ALFB/Hibrid_AF3-AbRaCD
+abracd.pl --raw --CDRs H3 --NP 8 --OUT ALFB_Hybrid
+```
+
+This folder contains an H3 input list, so run `H3` rather than `ALL`. Adjust `--NP` to match your available MPI processes.
+
 ### RosettaBenchmark
 
 The Rosetta benchmark also has all six prepared `AbRaCD_input_<CDR>.txt` lists in its `Processed/` directory. Run the six CDRs together with `ALL`:
@@ -223,6 +241,17 @@ abracd.pl --raw --CDRs ALL --NP 8 --OUT RBench
 ```
 
 Outputs use the `RBench` prefix and the log is `RBench.log`.
+
+#### RosettaBenchmark hybrid AF3–AbRaCD structures
+
+The hybrid H3 inputs are in `data/Benchmarks/RosettaBenchmark/Hibrid_AF3-AbRaCD/`. Run them from that directory:
+
+```bash
+cd data/Benchmarks/RosettaBenchmark/Hibrid_AF3-AbRaCD
+abracd.pl --raw --CDRs H3 --NP 8 --OUT RBench_Hybrid
+```
+
+This folder contains an H3 input list, so run `H3` rather than `ALL`. Adjust `--NP` to match your available MPI processes.
 
 ## Repository contents
 
