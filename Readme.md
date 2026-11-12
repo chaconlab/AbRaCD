@@ -57,7 +57,7 @@ src/
 
 ### Hybrid AF3–AbRaCD structures
 
-The ALFB and RosettaBenchmark `Hibrid_AF3-AbRaCD/` folders contain structures made by aligning the six anchor residues around each target H3 loop (three on each side) between the crystallographic structure and the AF3 model, then transferring the crystallographic loop into the AF3 model frame. This allows loop-specific RMSD evaluation of AF3 and provides structures for running AbRaCD in the AF3 model context to test whether it can improve on the AF3 prediction.
+The ALFB and RosettaBenchmark `Hybrid_AF3-AbRaCD/` folders contain structures made by aligning the six anchor residues around each target H3 loop (three on each side) between the crystallographic structure and the AF3 model, then transferring the crystallographic loop into the AF3 model frame. This allows loop-specific RMSD evaluation of AF3 and provides structures for running AbRaCD in the AF3 model context to test whether it can improve on the AF3 prediction.
 
 ## Requirements
 
@@ -220,10 +220,10 @@ Runs all six CDRs with the default sampling settings and Rosetta refinement. Adj
 
 #### ALFB hybrid AF3–AbRaCD structures
 
-The hybrid H3 inputs are in `data/Benchmarks/ALFB/Hibrid_AF3-AbRaCD/`. Run them from that directory:
+The hybrid H3 inputs are in `data/Benchmarks/ALFB/Hybrid_AF3-AbRaCD/`. Run them from that directory:
 
 ```bash
-cd data/Benchmarks/ALFB/Hibrid_AF3-AbRaCD
+cd data/Benchmarks/ALFB/Hybrid_AF3-AbRaCD
 abracd.pl --raw --CDRs H3 --NP 8 --OUT ALFB_Hybrid
 ```
 
@@ -242,10 +242,10 @@ Outputs use the `RBench` prefix and the log is `RBench.log`.
 
 #### RosettaBenchmark hybrid AF3–AbRaCD structures
 
-The hybrid H3 inputs are in `data/Benchmarks/RosettaBenchmark/Hibrid_AF3-AbRaCD/`. Run them from that directory:
+The hybrid H3 inputs are in `data/Benchmarks/RosettaBenchmark/Hybrid_AF3-AbRaCD/`. Run them from that directory:
 
 ```bash
-cd data/Benchmarks/RosettaBenchmark/Hibrid_AF3-AbRaCD
+cd data/Benchmarks/RosettaBenchmark/Hybrid_AF3-AbRaCD
 abracd.pl --raw --CDRs H3 --NP 8 --OUT RBench_Hybrid
 ```
 
