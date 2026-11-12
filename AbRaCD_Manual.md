@@ -2,6 +2,29 @@
 
 This manual describes the command-line interface implemented by `scripts/perl/abracd.pl` and the input files it consumes. Run commands from the working directory where you want the generated files, result folders, and log. The launcher can be checked with `abracd.pl --help`.
 
+## Sections
+
+- [1. Requirements and setup checks](#1-requirements-and-setup-checks)
+- [2. Main command](#2-main-command)
+  - [Input modes](#input-modes)
+  - [Options](#options)
+  - [Examples](#examples)
+- [3. File formats](#3-file-formats)
+  - [PDB list](#pdb-list)
+  - [Purge table](#purge-table)
+  - [RCD input list](#rcd-input-list)
+- [4. Chothia preprocessing with `AbRaCD_chothia_preprocces.pl`](#4-chothia-preprocessing-with-abracd_chothia_preproccespl)
+- [5. Design preparation with `ab_engineering_prep.pl`](#5-design-preparation-with-ab_engineering_preppl)
+  - [What the preparation script does](#what-the-preparation-script-does)
+  - [Recommended workflow for Chothia-numbered structures](#recommended-workflow-for-chothia-numbered-structures)
+  - [Recommended workflow for raw structures](#recommended-workflow-for-raw-structures)
+- [6. Outputs and logs](#6-outputs-and-logs)
+  - [Preprocessing outputs](#preprocessing-outputs)
+  - [RCD outputs](#rcd-outputs)
+  - [Rosetta refinement outputs for native structures](#rosetta-refinement-outputs-for-native-structures)
+  - [Design/modeling outputs](#designmodeling-outputs)
+  - [Run log](#run-log)
+
 ## 1. Requirements and setup checks
 
 Use the installation steps in [Readme.md](Readme.md). Before a run, confirm that:
@@ -128,6 +151,8 @@ nanobody.pdb H -
 
 Run it through the main workflow as `abracd.pl purge.txt --purge --CDRs H3`, or invoke preprocessing directly as described below.
 
+Example: [ALFB Chothia purge table](data/Benchmarks/ALFB/chothia/purge.txt).
+
 ### RCD input list
 
 Each non-comment row has at least seven whitespace-separated fields:
@@ -143,6 +168,8 @@ antibody_renum.pdb  97  109  H  ARWGGDGFYAMDY  13  H3
 ```
 
 Comments and blank lines are ignored by the design preparation helper. Standard generated files are named `AbRaCD_input_<CDR>.txt`. For `--model`, the input is expected to describe the loop/design interval in this same RCD row format; the helper writes `AbRaCD_design_<CDR>.txt` and `<source>_design.pdb` beside the input structures/list.
+
+Example: [ALFB H3 RCD input list](data/Benchmarks/ALFB/Processed/AbRaCD_input_H3.txt).
 
 ## 4. Chothia preprocessing with `AbRaCD_chothia_preprocces.pl`
 
@@ -209,13 +236,9 @@ The main command's `--model` mode calls this helper automatically, then passes t
 
 ### Recommended workflow for raw structures
 
-Raw structures have not been prepared or renumbered by the Chothia preprocessor. Create an RCD-format input file yourself and ensure that its PDB path, chain ID, and residue numbering match the raw PDB. The input row must provide the replacement interval and target loop information:
+Raw structures have not been prepared or renumbered by the Chothia preprocessor, so check that the PDB is suitable for modeling before starting. Confirm that it contains only the antibody Fv heavy and light chains. Check that residue numbering is consistent and that the loop region has the expected surrounding residues. Carefully determine the start and end of the CDR replacement interval in that PDB; incorrect limits or chain IDs can remove the wrong residues or produce an invalid design structure. The interval uses integer residue numbers and does not distinguish PDB insertion codes.
 
-```text
-PDB_file  start  end  chain  target_sequence  target_length  CDR
-```
-
-The start and end values are inclusive and refer to residue numbers in the raw PDB. The script uses the integer residue numbers and chain ID to remove existing residues in this interval; make sure the interval covers the residues to replace. It does not distinguish PDB insertion codes, so use an interval whose integer residue numbers identify the intended residues unambiguously. Set `target_sequence` to the desired loop sequence and `target_length` to its exact length. This is more than adjusting the start and end fields: the target sequence and length must also be supplied. The helper does not infer a missing loop sequence from a raw structure.
+Create an RCD input list for the structure with the correct PDB path, chain, inclusive start/end positions, CDR, and desired target sequence and length. The helper will not infer a missing target loop sequence from the raw structure. Follow the [RCD input list format](#rcd-input-list) when creating this file.
 
 Run the complete raw-structure design workflow by passing this original, user-prepared list to `abracd.pl --model`:
 
@@ -235,11 +258,45 @@ Chothia preprocessing writes the renumbered and cleaned `<source>_renum.pdb` str
 
 ### RCD outputs
 
-Each RCD run creates a result directory containing the generated loop decoys and `results.txt`. The results file includes RCD run information and, when a native crystallographic structure is available, the benchmark summary used to assess KORP filtering performance. H3 inputs containing loops of seven residues or fewer are split internally; those runs may also produce `results_shorts.txt` for the short-loop subset.
+Each RCD run creates a result directory containing the generated loop decoys and `results.txt`. The file records run information and, when native crystallographic structures are available, a benchmark summary with one row per input structure. Its main statistics describe the decoy set retained by KORP ranking (`LOCOBEST`):
+
+- **RMSD average, sigma, and minimum** summarize how closely the selected decoys match the native loop and how much their RMSDs vary.
+- **RMSD threshold percentages** (`<0.5 Å` through `<3.0 Å`) show the proportion of selected decoys below each RMSD threshold. Together, these values indicate how often the sampling produced candidates near the native conformation.
+- **Time** reports the RCD processing time for that structure.
+
+The final `Average` and `Sigma` rows summarize the benchmark statistics across the input structures. The report also includes algorithm diagnostics such as iteration counts, convergence, trial/success ratios, and internal/external RMSD and anchor fields. For explanations of these additional RCD-specific parameters, consult the [RCD documentation](https://github.com/chaconlab/RCD).
+
+H3 inputs containing loops of seven residues or fewer are split internally; those runs may also produce `results_shorts.txt` for the short-loop subset.
 
 ### Rosetta refinement outputs for native structures
 
-When refinement runs with a known native structure, it writes refined loop structures and score tables inside the corresponding RCD result directory. The per-case `*_rosettaS.txt` table is sorted by Rosetta energy, with the lowest-energy candidates first. Summary tables named `rosetta1...txt`, `rosetta2...txt`, `rosetta5...txt`, `rosetta10...txt`, `rosetta20...txt`, `rosetta50...txt`, and `rosetta100...txt` report RMSD results for the best candidate among the first 1, 2, 5, 10, 20, 50, or 100 candidates in that energy ranking. Thus, for example, the “best RMSD of the top 5” is the smallest RMSD to the native structure among the five lowest-energy refined candidates; it does not mean the five candidates with the lowest RMSD were ranked first. Smaller RMSD indicates a closer match to the crystallographic loop.
+When refinement runs with a known native structure, it writes refined loop structures and score tables inside the corresponding RCD result directory. The per-case `*_rosettaS.txt` file contains one row per refined decoy and is sorted by `E_full2` in ascending order, so the lowest-energy candidates appear first. Its columns are:
+
+| Field | Meaning |
+|---|---|
+| `loop` | Index of the decoy generated by RCD. |
+| `E_full` | Rosetta energy of the full structure with the RCD decoy inserted, before refinement. |
+| `E_loop` | Rosetta energy of the refined loop by itself. |
+| `R_rcd` | RMSD for the unrefined decoy as reported by RCD. |
+| `E_KORP` | KORP energy of the unrefined RCD decoy, before Rosetta refinement. |
+| First `R_BB`, `R_HA`, `R_SC` group | RMSDs of the RCD decoy before Rosetta refinement: backbone, heavy atoms, and side-chain heavy atoms, respectively. |
+| `E_full2` | Rosetta energy of the full structure after refinement. This is the energy used to sort `*_rosettaS.txt`. |
+| Final `R_CA`, `R_BB`, `R_BBO`, `R_CB`, `R_OCB`, `R_HA`, `R_SC`, `R_ALL` group | RMSDs of the refined decoy against the native loop, using the atom sets described below. |
+
+The PyRosetta RMSDs in this table are calculated over the loop residues, excluding the two anchor residues. RMSD is reported in ångströms. The RMSD atom-set names mean:
+
+| RMSD field | Atoms included |
+|---|---|
+| `R_CA` | Cα only. |
+| `R_BB` | Backbone N, Cα, and C atoms; excludes O. |
+| `R_BBO` | Backbone N, Cα, C, and O atoms. |
+| `R_CB` | Backbone N, Cα, and C, plus Cβ; excludes O. |
+| `R_OCB` | Backbone N, Cα, C, and O, plus Cβ. |
+| `R_HA` | All heavy atoms (non-hydrogen atoms). |
+| `R_SC` | Side-chain heavy atoms only; excludes backbone N, Cα, C, and O. |
+| `R_ALL` | All atoms present in the pose, including hydrogens when present. |
+
+The summary tables `rosetta1...txt`, `rosetta2...txt`, `rosetta5...txt`, `rosetta10...txt`, `rosetta20...txt`, `rosetta50...txt`, and `rosetta100...txt` examine the first 1, 2, 5, 10, 20, 50, or 100 candidates in the `E_full2` ranking. For each structure, the summary reports the candidate with the lowest final `R_BBO` among those candidates. For example, `rosetta5...txt` reports the lowest `R_BBO` found among the five lowest-`E_full2` refined decoys; it does not select the five lowest-RMSD candidates first. Smaller RMSD indicates a closer match to the crystallographic loop.
 
 ### Design/modeling outputs
 

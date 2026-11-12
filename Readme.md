@@ -8,6 +8,52 @@ This repository contains the scripts, data, and instructions needed to run AbRaC
 
 > Martín-Hernández, I., Chacón, P., & López-Blanco, J. R. (manuscript in preparation). *AbRaCD: Fast sampling-based prediction of antibody CDR loops*. Bioinformatics Advances. [Publication details to be added when final.]
 
+## Sections
+
+- [Overview](#overview)
+- [Repository directory guide](#repository-directory-guide)
+- [Requirements](#requirements)
+- [Installation](#installation)
+  - [General Bash user without Conda](#general-bash-user-without-conda)
+  - [RCD](#rcd)
+- [Quick start](#quick-start)
+- [Fast commands for reproducing benchmark paper results](#fast-commands-for-reproducing-benchmark-paper-results)
+  - [AbRaCD Leakege Free Benchmark (ALFB)](#abracd-leakege-free-benchmark-alfb)
+  - [RosettaBenchmark](#rosettabenchmark)
+- [Repository contents](#repository-contents)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+- [Manual](AbRaCD_Manual.md)
+
+## Repository directory guide
+
+The main project directories are organized as follows. Paths are relative to the repository root.
+
+```text
+data/
+├── Benchmarks/
+│   ├── ALFB/
+│   ├── RosettaBenchmark/
+│   └── Therapeutics/
+└── Maps/
+paper_results/
+scripts/
+├── perl/
+└── python/
+src/
+├── perl/
+└── python/
+```
+
+- `data/`
+  - `data/Benchmarks/` groups the available evaluation datasets (AFLB and Rosetta). Each dataset may include source Chothia structures, processed/renumbered structures with the RCD input lists, FASTA sequences, AlphaFold 3 model structures, and hybrid AF3–AbRaCD structures.
+  - `data/Maps/` contains the binary maps required by the workflow. CDR is included and KORP, and Dunbrack should be copied after RCD instalation.
+- `paper_results/` paper-related results.
+- `scripts/` contains the command-line workflow scripts.
+- `src/` contains supporting utilities used by the workflow.
+
 ## Requirements
 
 - **Python 3.10 or later**, with `mpi4py`
@@ -25,6 +71,8 @@ Tested PyRosetta releases:
 Other PyRosetta versions may work, but have not been tested. Compatibility is more likely with commonly used versions; very old versions may cause issues.
 
 ## Installation
+
+### Conda environment
 
 We recommend using a dedicated Conda environment for AbRaCD. This keeps Python and PyRosetta dependencies isolated from your other projects. Run the following commands from the repository root:
 
@@ -152,14 +200,14 @@ abracd.pl antibody.pdb --CDRs H3 --repROS 0 --OUT rcd_only_h3
 
 The run log is `AbRaCD.log`, or `<OUT>.log` when `--OUT` is set. `--NP` enables MPI RCD execution; omit it for serial RCD.
 
-## Recommended commands for reproducing benchmark results
+## Fast commands for reproducing benchmark paper results
 
 ### AbRaCD Leakege Free Benchmark (ALFB)
 
-The repository includes preprocessed ALFB benchmark inputs in `data/Benchmark/ALFB/Processed/`, alongside the renumbered PDB structures. Since all six files follow the `AbRaCD_input_<CDR>.txt` naming convention expected by raw mode, `--CDRs ALL` runs the complete set in one invocation:
+The repository includes preprocessed ALFB benchmark inputs in `data/Benchmarks/ALFB/Processed/`, alongside the renumbered PDB structures. Since all six files follow the `AbRaCD_input_<CDR>.txt` naming convention expected by raw mode, `--CDRs ALL` runs the complete set in one invocation:
 
 ```bash
-cd data/Benchmark/ALFB/Processed
+cd data/Benchmarks/ALFB/Processed
 abracd.pl --raw --CDRs ALL --NP 8 --OUT ALFB
 ```
 
@@ -170,7 +218,7 @@ Runs all six CDRs with the default sampling settings and Rosetta refinement. Adj
 The Rosetta benchmark also has all six prepared `AbRaCD_input_<CDR>.txt` lists in its `Processed/` directory. Run the six CDRs together with `ALL`:
 
 ```bash
-cd data/Benchmark/RosettaBenchmark/Processed
+cd data/Benchmarks/RosettaBenchmark/Processed
 abracd.pl --raw --CDRs ALL --NP 8 --OUT RBench
 ```
 
@@ -183,7 +231,7 @@ Outputs use the `RBench` prefix and the log is `RBench.log`.
 - `scripts/perl/ab_engineering_prep.pl`: design structure preparation used by `--model`.
 - `scripts/perl/refine_loops.pl` and `src/python/`: Rosetta refinement and structure utilities.
 - `data/Maps/`: CDR, KORP, and Dunbrack maps used by RCD.
-- `data/Benchmark/`: benchmark structures and example RCD inputs.
+- `data/Benchmarks/`: benchmark structures and example RCD inputs.
 
 ## Troubleshooting
 
