@@ -20,9 +20,7 @@ This repository contains the scripts, data, and instructions needed to run AbRaC
 - [Quick start](#quick-start)
 - [Fast commands for reproducing benchmark paper results](#fast-commands-for-reproducing-benchmark-paper-results)
   - [AbRaCD Leakege Free Benchmark (ALFB)](#abracd-leakege-free-benchmark-alfb)
-    - [ALFB hybrid AF3–AbRaCD structures](#alfb-hybrid-af3abracd-structures)
   - [RosettaBenchmark](#rosettabenchmark)
-    - [RosettaBenchmark hybrid AF3–AbRaCD structures](#rosettabenchmark-hybrid-af3abracd-structures)
 - [Repository contents](#repository-contents)
 - [Troubleshooting](#troubleshooting)
 
